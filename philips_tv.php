@@ -22,6 +22,7 @@ class philips_tv {
 	private $commands = false; //variable that will hold the commands from $commands_file
 	private $device_name = "philips-tv-connect"; //name this device will use to connect to the TV
 	private $app_name = "philips-tv-connect"; //app name this device uses
+	private $debug = false;
 	
 	public function __construct($protocol = false, $host = false, $port = false, $apiv = false) {
 		if($host && $protocol && $port && $apiv) { //if data given, set connection settings
@@ -34,10 +35,14 @@ class philips_tv {
 		$this->readCommands(); //load commands
 	}
 	
+	public function debug($bool = true) {
+		$this->debug = $bool;
+	}
+	
 	private function obtain_data() { //read from credentials file
 		if(file_exists($this->data_file)) { //credentials file is present
 			$data = $this->readCredentials(); //read from the file
-			if(isset($data['TV'])) { //make sure it is not corrupt
+			if(isset($data['TV']['user'])) { //make sure it is not corrupt
 				$this->TV = $data['TV']; 
 				$this->timestamp = $data['timestamp'];
 				$this->auth_key = $data['auth_key'];
@@ -65,21 +70,27 @@ class philips_tv {
 		$data = array();
 		$data["scope"] = $this->scope; //permissions
 		$data["device"] = $this->getDeviceSpecs(); //load specifications of this device
-		
+		$this->throwMessage("start pairing request<br />");
 		$response = $this->cURL_request($path, $data); //connect to the TV with the data and get an response
-		$response = json_decode($response); //decode response
-		if(isset($response->error_id)) {
-			if($response->error_id == "SUCCESS") {
-				$this->TV['auth_key'] = $result->auth_key;
-				$this->TV["pass"] = $result->auth_key;
-				$this->timestamp = $result->timestamp;
-				$this->writeCredentials();
-			}
+		
+		if($this->instring('200 OK', $response) && $this->instring('SUCCESS', $response)) { //scan result for the phrases '200 OK' and 'SUCCESS'
+			$response = json_decode($this->getJSON($response), true); //filter and decode result
+			$this->TV['auth_key'] = $response['auth_key']; //store the given key as auth key
+			$this->TV["pass"] =$response['auth_key']; //store the given key as pass for later authentication
+			$this->timestamp = $response['timestamp']; //store the given timestamp for later signing
+			$this->writeCredentials(); //store all to the credentials file
+			$this->throwMessage("Pairing request succes!");
+			return true;
+			
+		}elseif($this->instring("CONCURRENT_PAIRING", $response)) { //if string contains this, 60s have not past since last try
+			$this->throwMessage("Pairing already in progress");
 		}
+		return false;
 	}
 	
 	public function pair_confirm($pin = false) {
 		if($this->data_set && $this->pin) {
+			$this->throwMessage("Start confirm pairing");
 			$device_id = $this->TV['user'];
 			$auth_key = $this->TV['pass'];
 			$pin = $this->TV['pin'];
@@ -99,21 +110,28 @@ class philips_tv {
 			$path = "pair/grant";
 			$response = $this->cURL_request($path, $grant_request);
 			if($response !== false) {
-				if($this->instring('200 OK', $response) && $this->instring('complete', $response, false)) {
+				if($this->instring('200 OK', $response) && $this->instring('Pairing completed', $response)) {
+					$this->throwMessage("Pairing confirmed");
 					return true;
 				}
 			}
+		}else{
+			$this->throwMessage("data not set or pin not given");
 		}
 		return false;
 	}
 	
 	public function command($command = false) {
+		$this->throwMessage("Start command");
 		if($command) {
 			if(isset($this->commands[$command])) {
 				$body = $this->commands[$command]['body'];
 				$path = $this->commands[$command]['path'];
 				$response = $this->cURL_request($path, $body);
+				$this->throwMessage("Command succeeded.");
 				return true;
+			}else {
+				$this->throwMessage("Command {$command} not found.");
 			}
 		}
 		return false;
@@ -147,33 +165,39 @@ class philips_tv {
 	}
 	
 	private function cURL_request($path, $data = false) {
-		$target = "{$this->hostdata['protocol']}://{$this->hostdata['host']}:{$this->hostdata['port']}/{$this->hostdata['apiv']}/{$path}";
-		
-		$ch = curl_init($target);
-		
-		curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-		curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, FALSE);
-		curl_setopt( $ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json'));
-		curl_setopt($ch, CURLOPT_HEADER, 1);
-		curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-		curl_setopt($ch, CURLINFO_HEADER_OUT, true);
-		
-		if($data) {
-			curl_setopt( $ch, CURLOPT_POSTFIELDS, json_encode($data) );
-		}
-		
-		if(!($path == 'pair/request')) {
-			$credentials = "{$this->TV['user']}:{$this->TV['pass']}";
-			curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_DIGEST);
-			curl_setopt($ch, CURLOPT_USERPWD, $credentials);
-		}
-		
-		$result = curl_exec($ch);
-		if ($result === false) 
-			$result = curl_error($ch);
+		if($this->data_set || $path == 'pair/request') {
+			$target = "{$this->hostdata['protocol']}://{$this->hostdata['host']}:{$this->hostdata['port']}/{$this->hostdata['apiv']}/{$path}";
+			
+			$ch = curl_init($target);
 
-		curl_close($ch); 
-		return $result;
+			curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+			curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, FALSE);
+			curl_setopt( $ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json'));
+			curl_setopt($ch, CURLOPT_HEADER, 1);
+			curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
+			curl_setopt($ch, CURLINFO_HEADER_OUT, true);
+
+			if($data) {
+				curl_setopt( $ch, CURLOPT_POSTFIELDS, json_encode($data) );
+			}
+
+			if(!($path == 'pair/request')) {
+				$credentials = "{$this->TV['user']}:{$this->TV['pass']}";
+				curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_DIGEST);
+				curl_setopt($ch, CURLOPT_USERPWD, $credentials);
+			}
+
+			$result = curl_exec($ch);
+			if ($result === false) {
+				$result = curl_error($ch);
+			}
+
+			curl_close($ch); 
+			
+			$this->throwMessage($result);
+			
+			return $result;
+		}
 	}
 	
 	private function prints($data) {
@@ -188,9 +212,7 @@ class philips_tv {
 	}
 	
 	private function instring($q, $string, $allowcaps = true) {
-		if(!$allowcaps)
-			$q = strtolower($q); $string = strtolower($string);
-
+		if(!$allowcaps) {$q = strtolower($q); $string = strtolower($string);}
 		return strpos($string, $q) === false ? false : true;
 	}
 	
@@ -213,6 +235,12 @@ class philips_tv {
 	private function readCommands() {
 		$raw = file_get_contents($this->commands_file);
 		$this->commands = json_decode($raw, true);
+	}
+	
+	private function throwMessage($msg = '') {
+		if($this->debug) {
+			echo $msg.'<br />';
+		}
 	}
 	
 	
