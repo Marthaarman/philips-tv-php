@@ -13,8 +13,8 @@ class philips_tv {
 	private $scope = array("read", "write", "control"); //permissions to request
 	private $TV = array(); //will contain connection data for later on
 	private $data_set = false; //credentials file has been made if true
-	private $data_file = "credentials.json"; //file with credentials for connecting to the TV
-	private $commands_file = "commands.json"; //file with all commands to be sent to the TV
+	private $data_file = __DIR__."/credentials.json"; //file with credentials for connecting to the TV
+	private $commands_file = __DIR__."/commands.json"; //file with all commands to be sent to the TV
 	private $auth_key = false; //key that will be used to connect to the TV
 	private $timestamp = false; //timestamp used for pairing
 	private $pin = false; //pincode used for pairing, displayed on the TV
