@@ -200,9 +200,9 @@ class philips_tv {
 			'auth_key' => $this->auth_key,
 			'timestamp' => $this->timestamp
 		);
-		if(file_exists("credentials.json")) {unlink("credentials.json");}
+		if(file_exists($this->data_file)) {unlink($this->data_file);}
 		$json = json_encode($data);
-		file_put_contents("credentials.json", $json);
+		file_put_contents($this->data_file, $json);
 	}
 	
 	private function readCredentials() {
